@@ -26,10 +26,22 @@ for col in pct_cols:
 def root():
     return {"message": "UFC Fight Predictor API"}
 
-@app.get("/predict/{fighter1}/{fighter2}")
+@app.get("/predict")
 def predict(fighter1: str, fighter2: str):
     f1 = fighters[fighters["Fighter_Name"] == fighter1]
     f2 = fighters[fighters["Fighter_Name"] == fighter2]
+
+@app.get("/fighters")
+def get_fighters():
+    return fighters[["Fighter_Name", "Wins", "Losses", "Draws"]].fillna("").rename(
+        columns={"Fighter_Name": "name"}
+    ).assign(
+        id=fighters["Fighter_Name"],
+        record=fighters["Wins"].astype(int).astype(str) + "-" +
+               fighters["Losses"].astype(int).astype(str) + "-" +
+               fighters["Draws"].astype(int).astype(str),
+        weightClass="",
+    ).to_dict(orient="records")
 
     if f1.empty:
         return {"error": f"Fighter not found: {fighter1}"}
