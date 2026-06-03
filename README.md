@@ -1,92 +1,72 @@
-# FastAPI Demo
+# UFC Fight Predictor API
 
-## Getting Started
+A REST API that predicts UFC fight outcomes using a Random Forest classifier trained on 8,500+ historical fights.
 
-### GitHub Codespaces
+## How It Works
 
-The easiest way to start working is to open your GitHub repository in GitHub Codespaces.
+For any two fighters, the model computes differentials across 11 features derived from career statistics — striking volume, striking accuracy, strikes absorbed, takedown averages, takedown defense, submission attempts, reach, and win/loss record. These differentials are passed to a Random Forest classifier that returns win probabilities for each fighter.
 
-From within that environment, you have a full IDE to work with the code, run commands in the terminal, preview the application by running the `./preview.sh` script, and perform normal `git` add/commit/push commands.
+**Model accuracy: 69.5%** on held-out test data (vs. 63% baseline of always picking Fighter 1).
 
-### Local
+**Key finding:** Striking volume differential (SLpM) is the strongest predictor of fight outcomes. Reach advantage, commonly cited in broadcast commentary, ranked last among all features.
 
-After forking this repository for your own work, you may need to set up an isolated environment in Python. I suggest using `pipenv` for this:
+## Endpoints
 
+### `GET /fighters`
+Returns a list of all 4,400+ fighters in the dataset with their name, record, and ID.
+
+**Response:**
+```json
+[
+  {
+    "id": "Jon Jones",
+    "name": "Jon Jones",
+    "record": "27-1-0",
+    "weightClass": ""
+  }
+]
 ```
-# Install pipenv itself
-python3 -m pip install pipenv
 
-# Then from within the root directory of this project,
-# create a new virtual environment
-pipenv shell
+### `GET /predict`
+Returns win probabilities and a predicted winner for two fighters.
 
-# Exit the virtual environment at any point with "exit"
-# Return to it by running "pipenv shell" from the directory.
+**Query Parameters:**
+- `fighter1` — name of the first fighter
+- `fighter2` — name of the second fighter
+
+**Example:**
+GET /predict?fighter1=Jon Jones&fighter2=Stipe Miocic
+**Response:**
+```json
+{
+  "fighter1": "Jon Jones",
+  "fighter2": "Stipe Miocic",
+  "fighter1_win_probability": 0.84,
+  "fighter2_win_probability": 0.16,
+  "predicted_winner": "Jon Jones"
+}
 ```
 
-## Development 
+## Tech Stack
 
-As typical with FastAPI development, run the local server as you code:
-```
-# cd into the app/ directory
+- **Python** — FastAPI, scikit-learn, pandas, joblib
+- **Model** — Random Forest Classifier (100 estimators)
+- **Data** — UFC Stats (1993–2026), 8,500+ fights, 4,400+ fighters
+
+## Running Locally
+
+```bash
 cd app
-
-# run the local uvicorn server (install locally first)
+pip install fastapi uvicorn scikit-learn pandas joblib
 uvicorn main:app --reload
 ```
 
-Your dev site is now running locally at [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
+API will be available at `http://localhost:8000`.
 
+## Data & Limitations
 
-## Sample Endpoints and Methods
+Fighter statistics are career averages at the time of data extraction, not historical snapshots per fight. This means the model uses current stats to predict past fights, which introduces a known data integrity limitation. Rolling averages calculated at fight time would improve accuracy and is a planned improvement.
 
-This template contains a variety of methods and endpoints:
+## Dataset
 
-### `http://127.0.0.1:8000/add/7/3`
-
-Adds two integers taken as URL path parameters
-```
-{
-  "sum": 10
-}
-```
-
-### `http://127.0.0.1:8000/items/1234567890?q=foo&s=bar`
-
-Takes an integer path parameter `1234567890` as well as two query string parameters `foo` and `bar`.
-
-```
-{
-  "item_id": 1234567890,
-  "q": "foo",
-  "s": "bar"
-}
-```
-
-For more on catching POST payloads in JSON, or form parameters, consult the FastAPI documentation.
-
-## Build the Container
-
-Build locally using the `docker build` command:
-```
-docker build -t some_org/some_image:some_tag .
-```
-
-## Run the Container Locally
-
-Run the image locally and map the container port (80) to some host port (8080):
-```
-docker run -d -p 8080:80 --rm some_org/some_image:some_tag
-```
-
-## Set up a Build Pipeline
-
-Look in `.build.yml` for a sample template that completes the following steps:
-
-1. Builds the container image.
-2. Pushes the new image to the container registry of your choice (i.e. Docker Hub, GHCR, etc.)
-3. Pushes an SQS message to Amazon triggering a re-deployment of the app in DCOS.
-
-To enable this pipeline, place it in `.github/workflows/` and git push. Some repository secrets must be set before builds will work.
-
-> post template
+[UFC Dataset 1994–2026](https://www.kaggle.com/datasets/jossilva3110/ufc-dataset-1994-2026) via Kaggle.
