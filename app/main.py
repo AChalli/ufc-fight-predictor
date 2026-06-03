@@ -16,7 +16,6 @@ app.add_middleware(
 model = joblib.load("../models/random_forest.pkl")
 fighters = pd.read_csv("../data/ufc_fighters_final.csv")
 
-# clean the data the same way we did in the notebook
 fighters["Reach"] = fighters["Reach"].str.replace('"', '').astype(float)
 pct_cols = ["Str_Acc", "Str_Def", "TD_Acc", "TD_Def"]
 for col in pct_cols:
@@ -25,11 +24,6 @@ for col in pct_cols:
 @app.get("/")
 def root():
     return {"message": "UFC Fight Predictor API"}
-
-@app.get("/predict")
-def predict(fighter1: str, fighter2: str):
-    f1 = fighters[fighters["Fighter_Name"] == fighter1]
-    f2 = fighters[fighters["Fighter_Name"] == fighter2]
 
 @app.get("/fighters")
 def get_fighters():
@@ -42,6 +36,11 @@ def get_fighters():
                fighters["Draws"].astype(int).astype(str),
         weightClass="",
     ).to_dict(orient="records")
+
+@app.get("/predict")
+def predict(fighter1: str, fighter2: str):
+    f1 = fighters[fighters["Fighter_Name"] == fighter1]
+    f2 = fighters[fighters["Fighter_Name"] == fighter2]
 
     if f1.empty:
         return {"error": f"Fighter not found: {fighter1}"}
