@@ -1,8 +1,6 @@
-uvicorn
 fastapi[standard]
-typing
-pydantic
-# pymongo
-# dnspython
-# mysqlclient
-mysql-connector-python
+uvicorn
+pandas
+scikit-learn
+joblib
+numpy
