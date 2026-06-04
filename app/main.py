@@ -14,7 +14,10 @@ app.add_middleware(
 )
 
 model = joblib.load("/code/models/random_forest.pkl")
-fighters = pd.read_csv("/code/data/ufc_fighters_final.csv")
+fighters = pd.read_csv("/code/data/ufc_fighters_final.csv",
+    usecols=["Fighter_Name", "Reach", "SLpM", "Str_Acc", "SApM",
+             "Str_Def", "TD_Avg", "TD_Acc", "TD_Def", "Sub_Avg",
+             "Wins", "Losses", "Draws"])
 
 fighters["Reach"] = fighters["Reach"].str.replace('"', '').astype(float)
 pct_cols = ["Str_Acc", "Str_Def", "TD_Acc", "TD_Def"]

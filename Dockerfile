@@ -7,4 +7,4 @@ COPY ./train.py /code/train.py
 COPY ./app /code/app
 COPY ./models /code/models
 RUN python train.py
-CMD ["fastapi", "run", "app/main.py", "--port", "80", "--workers", "4"]
+CMD ["fastapi", "run", "app/main.py", "--port", "80", "--workers", "1"]
