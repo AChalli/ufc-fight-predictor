@@ -6,9 +6,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # paths
-DATA_PATH = "data/ufc_fighters_final.csv"
-FIGHTS_PATH = "data/ufc_gold_dataset_final.csv"
-MODEL_PATH = "models/random_forest.pkl"
+BASE = "/code" if os.path.exists("/code") else ".."
+DATA_PATH = f"{BASE}/data/ufc_fighters_final.csv"
+FIGHTS_PATH = f"{BASE}/data/ufc_gold_dataset_final.csv"
+MODEL_PATH = f"{BASE}/models/random_forest.pkl"
 
 os.makedirs("models", exist_ok=True)
 

@@ -13,8 +13,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = joblib.load("../models/random_forest.pkl")
-fighters = pd.read_csv("../data/ufc_fighters_final.csv")
+model = joblib.load("/code/models/random_forest.pkl")
+fighters = pd.read_csv("/code/data/ufc_fighters_final.csv")
 
 fighters["Reach"] = fighters["Reach"].str.replace('"', '').astype(float)
 pct_cols = ["Str_Acc", "Str_Def", "TD_Acc", "TD_Def"]
