@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # paths
-BASE = "/code" if os.path.exists("/code") else ".."
+BASE = "/code" if os.path.exists("/code") else "."
 DATA_PATH = f"{BASE}/data/ufc_fighters_final.csv"
 FIGHTS_PATH = f"{BASE}/data/ufc_gold_dataset_final.csv"
 MODEL_PATH = f"{BASE}/models/random_forest.pkl"
@@ -32,30 +32,45 @@ df = df.rename(columns={col: "F2_" + col for col in fighters.columns if col != "
 # target
 df["target"] = (df["Winner"] == df["Fighter_1"]).astype(int)
 
-# features
+# drop draws / no contests (they aren't wins for either fighter)
+df = df[df["Winner"].isin(df["Fighter_1"]) | df["Winner"].isin(df["Fighter_2"])]
+df = df[(df["Winner"] == df["Fighter_1"]) | (df["Winner"] == df["Fighter_2"])]
+
 df["F1_Reach"] = pd.to_numeric(df["F1_Reach"], errors="coerce")
 df["F2_Reach"] = pd.to_numeric(df["F2_Reach"], errors="coerce")
 
-feature_cols = [
-    "reach_diff", "slpm_diff", "str_acc_diff", "sapm_diff",
-    "str_def_diff", "td_avg_diff", "td_acc_diff", "td_def_diff",
-    "sub_avg_diff", "win_diff", "loss_diff"
-]
+stat_map = {
+    "reach_diff":    ("F1_Reach",   "F2_Reach"),
+    "slpm_diff":     ("F1_SLpM",    "F2_SLpM"),
+    "str_acc_diff":  ("F1_Str_Acc", "F2_Str_Acc"),
+    "sapm_diff":     ("F1_SApM",    "F2_SApM"),
+    "str_def_diff":  ("F1_Str_Def", "F2_Str_Def"),
+    "td_avg_diff":   ("F1_TD_Avg",  "F2_TD_Avg"),
+    "td_acc_diff":   ("F1_TD_Acc",  "F2_TD_Acc"),
+    "td_def_diff":   ("F1_TD_Def",  "F2_TD_Def"),
+    "sub_avg_diff":  ("F1_Sub_Avg", "F2_Sub_Avg"),
+    "win_diff":      ("F1_Wins",    "F2_Wins"),
+    "loss_diff":     ("F1_Losses",  "F2_Losses"),
+}
+feature_cols = list(stat_map.keys())
 
-df["reach_diff"] = df["F1_Reach"] - df["F2_Reach"]
-df["slpm_diff"] = df["F1_SLpM"] - df["F2_SLpM"]
-df["str_acc_diff"] = df["F1_Str_Acc"] - df["F2_Str_Acc"]
-df["sapm_diff"] = df["F1_SApM"] - df["F2_SApM"]
-df["str_def_diff"] = df["F1_Str_Def"] - df["F2_Str_Def"]
-df["td_avg_diff"] = df["F1_TD_Avg"] - df["F2_TD_Avg"]
-df["td_acc_diff"] = df["F1_TD_Acc"] - df["F2_TD_Acc"]
-df["td_def_diff"] = df["F1_TD_Def"] - df["F2_TD_Def"]
-df["sub_avg_diff"] = df["F1_Sub_Avg"] - df["F2_Sub_Avg"]
-df["win_diff"] = df["F1_Wins"] - df["F2_Wins"]
-df["loss_diff"] = df["F1_Losses"] - df["F2_Losses"]
+for name, (a, b) in stat_map.items():
+    df[name] = df[a] - df[b]
 
-X = df[feature_cols].fillna(df[feature_cols].median())
-y = df["target"]
+# original orientation
+orig = df[feature_cols].copy()
+orig["target"] = df["target"].values
+
+# mirrored orientation: swap the two fighters, flip the label
+mirror = (df[feature_cols] * -1).copy()
+mirror["target"] = 1 - df["target"].values
+
+balanced = pd.concat([orig, mirror], ignore_index=True)
+
+X = balanced[feature_cols].fillna(balanced[feature_cols].median())
+y = balanced["target"]
+
+print(y.value_counts())   # should now be exactly 50/50
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
