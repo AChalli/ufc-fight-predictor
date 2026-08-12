@@ -137,7 +137,7 @@ model.fit(X_train, y_train)
 print(f"Accuracy: {accuracy_score(y_test, model.predict(X_test)):.4f}")
 print(pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False))
 
-joblib.dump(model, MODEL_PATH)
+joblib.dump({"model": model, "features": feature_cols, "medians": med.to_dict()}, MODEL_PATH)
 
 # ---------- 6. current-state stats for serving ----------
 totals = long.groupby("fighter")[SUM_COLS].sum()
@@ -147,3 +147,11 @@ serve.insert(0, "Fighter_Name", totals.index)
 serve["Reach"] = serve["Fighter_Name"].map(reach_map)
 serve[["Fighter_Name"] + STATS].to_csv(SERVE_PATH, index=False)
 print(f"Saved {len(serve)} fighters to {SERVE_PATH}")
+
+# ---------- 7. sanity checks on the serve file ----------
+missing_reach = serve["Reach"].isna().sum()
+print(f"serve rows: {len(serve)}   missing reach: {missing_reach}")
+
+for n in ["Jon Jones", "Islam Makhachev", "Merab Dvalishvili",
+          "Sean O'Malley", "Ilia Topuria", "Alex Pereira"]:
+    print(f"  {n}: {n in set(serve['Fighter_Name'])}")
