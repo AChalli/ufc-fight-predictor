@@ -134,3 +134,5 @@ dmypy.json
 
 # trained model
 models/*.pkl
+
+data/fighter_current_stats.csv
