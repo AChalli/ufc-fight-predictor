@@ -64,13 +64,13 @@ for c in SUM_COLS:
     long["prior_" + c] = g[c].cumsum() - long[c]
 long["n_prior"] = g.cumcount()
 
-# NEW: last-WINDOW totals from prior fights only
+# last-WINDOW totals from prior fights only
 for c in SUM_COLS:
     long["r_" + c] = g[c].transform(
         lambda s: s.shift(1).rolling(WINDOW, min_periods=1).sum())
 long["r_n"] = g.cumcount().clip(upper=WINDOW)
 
-# NEW: days since previous fight
+# days since previous fight
 long["layoff"] = g["date"].diff().dt.days
 
 # ---------- 2. derive rate stats ----------
@@ -104,7 +104,7 @@ pre["Reach"]  = pre["fighter"].map(reach_map)
 pre["Losses"] = long["n_prior"] - long["prior_won"]
 pre["Wins"]   = long["prior_won"]
 
-# NEW: age in years at fight date
+# age in years at fight date
 pre["Age"] = (pre["date"] - pre["fighter"].map(dob_map)).dt.days / 365.25
 
 ATTRS = CAREER + RECENT + ["Reach", "Wins", "Losses", "Age", "layoff"]
