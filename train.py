@@ -12,6 +12,9 @@ MODEL_PATH    = f"{BASE}/models/random_forest.pkl"
 SERVE_PATH    = f"{BASE}/data/fighter_current_stats.csv"
 os.makedirs(f"{BASE}/models", exist_ok=True)
 
+WINDOW = 5          # recency window
+MIN_PRIOR = 2
+
 fights   = pd.read_csv(FIGHTS_PATH)
 fighters = pd.read_csv(FIGHTERS_PATH)
 
@@ -20,15 +23,14 @@ fights   = fights.drop_duplicates(subset="Fight_URL", keep="first")
 
 fights["Event_Date"] = pd.to_datetime(fights["Event_Date"])
 fights = fights.sort_values("Event_Date").reset_index(drop=True)
-
-# keep only fights with a decisive winner (drops draws / no contests)
 fights = fights[(fights["Winner"] == fights["Fighter_1"]) |
                 (fights["Winner"] == fights["Fighter_2"])].reset_index(drop=True)
 
-# static biometric — constant over time, so it never leaked
+# static attributes
 fighters["Reach"] = pd.to_numeric(
     fighters["Reach"].astype(str).str.replace('"', ''), errors="coerce")
 reach_map = fighters.set_index("Fighter_Name")["Reach"]
+dob_map   = fighters.set_index("Fighter_Name")["DOB"].pipe(pd.to_datetime, errors="coerce")
 
 # ---------- 1. one row per fighter per fight ----------
 def side(df, me, opp):
@@ -56,16 +58,26 @@ SUM_COLS = ["mins", "sig_landed", "sig_att", "td_landed", "td_att", "sub_att",
             "opp_sig_landed", "opp_sig_att", "opp_td_landed", "opp_td_att", "won"]
 
 g = long.groupby("fighter")
+
+# career totals from prior fights only
 for c in SUM_COLS:
-    # cumsum minus current row = totals from PRIOR fights only
     long["prior_" + c] = g[c].cumsum() - long[c]
 long["n_prior"] = g.cumcount()
 
-# ---------- 2. derive rate stats from prior totals ----------
+# NEW: last-WINDOW totals from prior fights only
+for c in SUM_COLS:
+    long["r_" + c] = g[c].transform(
+        lambda s: s.shift(1).rolling(WINDOW, min_periods=1).sum())
+long["r_n"] = g.cumcount().clip(upper=WINDOW)
+
+# NEW: days since previous fight
+long["layoff"] = g["date"].diff().dt.days
+
+# ---------- 2. derive rate stats ----------
 def rate(num, den):
     return (num / den).where(den > 0)
 
-def derive(d, p):
+def derive(d, p, n_col):
     return pd.DataFrame({
         "SLpM":    rate(d[p+"sig_landed"], d[p+"mins"]),
         "SApM":    rate(d[p+"opp_sig_landed"], d[p+"mins"]),
@@ -75,83 +87,108 @@ def derive(d, p):
         "TD_Acc":  rate(d[p+"td_landed"], d[p+"td_att"]),
         "TD_Def":  1 - rate(d[p+"opp_td_landed"], d[p+"opp_td_att"]),
         "Sub_Avg": rate(d[p+"sub_att"], d[p+"mins"]) * 15,
-        "Wins":    d[p+"won"],
-        "Losses":  d["n_prior"] - d[p+"won"],
+        "WinRate": rate(d[p+"won"], d[n_col]),
     })
 
-STATS = ["SLpM","SApM","Str_Acc","Str_Def","TD_Avg","TD_Acc","TD_Def","Sub_Avg","Wins","Losses","Reach"]
+CAREER = ["SLpM","SApM","Str_Acc","Str_Def","TD_Avg","TD_Acc","TD_Def","Sub_Avg","WinRate"]
+RECENT = ["r" + s for s in CAREER]
 
-pre = pd.concat([long[["fight_id","fighter","n_prior"]], derive(long, "prior_")], axis=1)
-pre["Reach"] = pre["fighter"].map(reach_map)
+pre = long[["fight_id","fighter","date","n_prior","layoff"]].copy()
+pre = pd.concat([pre, derive(long, "prior_", "n_prior")], axis=1)
 
-# ---------- 3. attach pre-fight stats back to each fight ----------
+recent = derive(long, "r_", "r_n")
+recent.columns = RECENT
+pre = pd.concat([pre, recent], axis=1)
+
+pre["Reach"]  = pre["fighter"].map(reach_map)
+pre["Losses"] = long["n_prior"] - long["prior_won"]
+pre["Wins"]   = long["prior_won"]
+
+# NEW: age in years at fight date
+pre["Age"] = (pre["date"] - pre["fighter"].map(dob_map)).dt.days / 365.25
+
+ATTRS = CAREER + RECENT + ["Reach", "Wins", "Losses", "Age", "layoff"]
+
+# ---------- 3. attach back to each fight ----------
 df = fights[["Fight_URL","Event_Date","Fighter_1","Fighter_2","Winner"]].copy()
 
 for i, col in [(1, "Fighter_1"), (2, "Fighter_2")]:
-    side_stats = pre.rename(columns={c: f"F{i}_{c}" for c in STATS + ["n_prior"]})
-    df = df.merge(side_stats, left_on=["Fight_URL", col],
-                  right_on=["fight_id", "fighter"], how="left") \
-           .drop(columns=["fight_id", "fighter"])
+    s = pre.rename(columns={c: f"F{i}_{c}" for c in ATTRS + ["n_prior"]})
+    df = df.merge(s[["fight_id","fighter"] + [f"F{i}_{c}" for c in ATTRS + ["n_prior"]]],
+                  left_on=["Fight_URL", col], right_on=["fight_id","fighter"], how="left") \
+           .drop(columns=["fight_id","fighter"])
 
-# a debutant has no history — the model can't say anything about them
-MIN_PRIOR = 2
 df = df[(df["F1_n_prior"] >= MIN_PRIOR) & (df["F2_n_prior"] >= MIN_PRIOR)].reset_index(drop=True)
 
 # ---------- 4. differentials + target ----------
 df["target"] = (df["Winner"] == df["Fighter_1"]).astype(int)
 
 feature_cols = []
-for s in STATS:
-    name = s.lower() + "_diff"
-    df[name] = df[f"F1_{s}"] - df[f"F2_{s}"]
+for a in ATTRS:
+    name = a.lower() + "_diff"
+    df[name] = df[f"F1_{a}"] - df[f"F2_{a}"]
     feature_cols.append(name)
 
-# ---------- 5. chronological split (train on past, test on future) ----------
+# ---------- 5. chronological split ----------
 cutoff = df["Event_Date"].quantile(0.8)
 train_df = df[df["Event_Date"] <= cutoff]
 test_df  = df[df["Event_Date"] >  cutoff]
 
 def build_xy(sub):
-    orig = sub[feature_cols].copy()
-    orig["target"] = sub["target"].values
-    mirror = (sub[feature_cols] * -1).copy()
-    mirror["target"] = 1 - sub["target"].values
-    both = pd.concat([orig, mirror], ignore_index=True)
+    orig = sub[feature_cols].copy();   orig["target"] = sub["target"].values
+    mirr = (sub[feature_cols] * -1);   mirr["target"] = 1 - sub["target"].values
+    both = pd.concat([orig, mirr], ignore_index=True)
     return both[feature_cols], both["target"]
 
 X_train, y_train = build_xy(train_df)
 X_test,  y_test  = build_xy(test_df)
 
-# fill using TRAIN medians only — test medians would leak
 med = X_train.median()
-X_train = X_train.fillna(med)
-X_test  = X_test.fillna(med)
+X_train, X_test = X_train.fillna(med), X_test.fillna(med)
 
-print(f"train fights: {len(train_df)}   test fights: {len(test_df)}")
-print(f"test cutoff:  {cutoff.date()}")
-print(y_train.value_counts().to_dict())
+print(f"features: {len(feature_cols)}   train: {len(train_df)}   test: {len(test_df)}")
+print(f"cutoff: {cutoff.date()}")
 
-model = RandomForestClassifier(n_estimators=300, min_samples_leaf=5, random_state=42, n_jobs=-1)
+model = RandomForestClassifier(n_estimators=300, min_samples_leaf=5,
+                               random_state=42, n_jobs=-1)
 model.fit(X_train, y_train)
 
-print(f"Accuracy: {accuracy_score(y_test, model.predict(X_test)):.4f}")
-print(pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False))
+p = model.predict_proba(X_test)[:, 1]
+print(f"\nAccuracy: {accuracy_score(y_test, (p > 0.5).astype(int)):.4f}")
+print(f"prob range: {p.min():.3f} to {p.max():.3f}   above 0.70: {(p > 0.70).mean():.1%}")
+
+print("\nCALIBRATION")
+print(" bin        n   predicted   actual")
+bins = np.arange(0, 1.01, 0.1)
+idx = np.digitize(p, bins) - 1
+for b in range(len(bins) - 1):
+    m = idx == b
+    if m.sum() >= 20:
+        print(f"{bins[b]:.1f}-{bins[b+1]:.1f}  {m.sum():5d}   {p[m].mean():.3f}     {y_test.values[m].mean():.3f}")
+
+print("\nTOP FEATURES")
+print(pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False).head(12))
 
 joblib.dump({"model": model, "features": feature_cols, "medians": med.to_dict()}, MODEL_PATH)
 
 # ---------- 6. current-state stats for serving ----------
-totals = long.groupby("fighter")[SUM_COLS].sum()
-totals["n_prior"] = long.groupby("fighter").size()
-serve = derive(totals.add_prefix("prior_").rename(columns={"prior_n_prior": "n_prior"}), "prior_")
-serve.insert(0, "Fighter_Name", totals.index)
-serve["Reach"] = serve["Fighter_Name"].map(reach_map)
-serve[["Fighter_Name"] + STATS].to_csv(SERVE_PATH, index=False)
-print(f"Saved {len(serve)} fighters to {SERVE_PATH}")
+last = long.sort_values("date").groupby("fighter").tail(WINDOW)
+career_tot = long.groupby("fighter")[SUM_COLS].sum()
+career_tot["n"] = long.groupby("fighter").size()
+recent_tot = last.groupby("fighter")[SUM_COLS].sum()
+recent_tot["n"] = last.groupby("fighter").size()
 
-# ---------- 7. sanity checks on the serve file ----------
-missing_reach = serve["Reach"].isna().sum()
-print(f"serve rows: {len(serve)}   missing reach: {missing_reach}")
+serve   = derive(career_tot.add_prefix("prior_"), "prior_", "prior_n")
+serve_r = derive(recent_tot.add_prefix("r_"),     "r_",     "r_n")
+serve_r.columns = RECENT
+serve = pd.concat([serve, serve_r], axis=1)
 
-for n in ["Jon Jones", "Islam Makhachev", "Merab Dvalishvili",
-          "Sean O'Malley", "Ilia Topuria", "Alex Pereira"]:
-    print(f"  {n}: {n in set(serve['Fighter_Name'])}")
+serve["Wins"]   = career_tot["won"]
+serve["Losses"] = career_tot["n"] - career_tot["won"]
+serve.insert(0, "Fighter_Name", career_tot.index)
+serve["Reach"]     = serve["Fighter_Name"].map(reach_map)
+serve["DOB"]       = serve["Fighter_Name"].map(dob_map)
+serve["last_fight"] = long.groupby("fighter")["date"].max().values
+
+serve.to_csv(SERVE_PATH, index=False)
+print(f"\nSaved {len(serve)} fighters   missing reach: {serve['Reach'].isna().sum()}   missing DOB: {serve['DOB'].isna().sum()}")
