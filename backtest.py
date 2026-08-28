@@ -2,14 +2,11 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+from train import test_df, feature_cols, med, model
 
 BASE = "/code" if os.path.exists("/code") else "."
 ODDS_PATH = f"{BASE}/data/ufc-master.csv"
 
-# ---------- rebuild the exact test set train.py evaluates on ----------
-# simplest approach: import the pieces from train.py rather than duplicating.
-# for now, run train.py first so test_df / model exist, or refactor into a module.
-from train import test_df, feature_cols, med, model, build_xy
 
 # ---------- 1. load odds and build the join key ----------
 odds = pd.read_csv(ODDS_PATH, low_memory=False)
@@ -88,15 +85,6 @@ def simulate(bt, threshold, calibrate=None):
             "profit": d["profit"].sum(), "roi": d["profit"].sum() / d["stake"].sum(),
             "avg_dec": d["dec"].mean()}
 
-# correction for the known probability compression, measured on the test set
-CAL = [(0.0, 0.35, -0.06), (0.35, 0.45, -0.04), (0.45, 0.55, 0.02),
-       (0.55, 0.70, 0.06), (0.70, 1.01, 0.04)]
-
-def compress_fix(p):
-    for lo, hi, adj in CAL:
-        if lo <= p < hi:
-            return min(max(p + adj, 0.01), 0.99)
-    return p
 
 print("\n--- RAW PROBABILITIES ---")
 print(f"{'EV thresh':>10} {'bets':>6} {'hit':>7} {'ROI':>8} {'profit':>9}")
@@ -105,15 +93,9 @@ for t in [0.0, 0.05, 0.10, 0.20]:
     if s:
         print(f"{t:>10.2f} {s['bets']:>6} {s['hit']:>6.1%} {s['roi']:>7.2%} {s['profit']:>8.1f}u")
 
-print("\n--- COMPRESSION-CORRECTED ---")
-print(f"{'EV thresh':>10} {'bets':>6} {'hit':>7} {'ROI':>8} {'profit':>9}")
-for t in [0.0, 0.05, 0.10, 0.20]:
-    s = simulate(bt, t, calibrate=compress_fix)
-    if s:
-        print(f"{t:>10.2f} {s['bets']:>6} {s['hit']:>6.1%} {s['roi']:>7.2%} {s['profit']:>8.1f}u")
 
 # ---------- 7. underdogs vs favorites ----------
-print("\n--- BY PRICE BUCKET (EV > 0.05, corrected) ---")
+print("\n--- BY PRICE BUCKET (EV > 0.05) ---")
 for lo, hi, label in [(1.0, 1.6, "heavy fav"), (1.6, 2.0, "fav"),
                       (2.0, 2.8, "dog"), (2.8, 99, "big dog")]:
     sub = bt.copy()
@@ -123,7 +105,7 @@ for lo, hi, label in [(1.0, 1.6, "heavy fav"), (1.6, 2.0, "fav"),
                             (r["p2"], r["dec_2"], r["target"] == 0)]:
             if not (lo <= dec < hi):
                 continue
-            q = compress_fix(p)
+            q = p
             if q * (dec - 1) - (1 - q) > 0.05:
                 rows.append({"profit": (dec - 1) if won else -1.0, "won": won})
     if len(rows) >= 10:
