@@ -1,76 +1,171 @@
-# UFC Fight Predictor API
+# UFC Fight Predictor
 
-A REST API that predicts UFC fight outcomes using a Random Forest classifier trained on 4,700+ historical fights, with features computed strictly from information available before each fight.
+A machine learning system that predicts UFC fight outcomes from pre-fight
+statistics, served as a REST API with a live web frontend. The project doubles
+as an experiment: **can a fan's understanding of stylistic matchups be encoded
+as features, and does it help a model predict fights the betting market has
+already priced?**
 
-## Results
+**Live app:** [v0-yuncfc.vercel.app](https://v0-yuncfc.vercel.app)
+**Frontend repo:** [ufc-fight-predictor-ui](https://github.com/AChalli/ufc-fight-predictor-ui)
 
-**61.2% accuracy** on a held-out chronological test set (fights after May 2023), against a 50% baseline.
+---
 
-An earlier version of this model reported 69.5%. That number was wrong, and finding out why was the most useful part of building this.
+## Results at a glance
 
-## The Leakage Problem
+| Metric | Value |
+|---|---|
+| Test accuracy (held-out, chronological) | 64.2% |
+| Accuracy on fights with betting odds | 65.9% |
+| Betting-market accuracy on the same fights | 70.3% |
+| Backtested ROI vs closing odds | negative at every threshold |
 
-The original pipeline pulled fighter statistics from a roster file containing career averages as of the scrape date in 2026. Predicting a 2015 fight with a fighter's 2026 career stats means the model already knows how that fighter's career turned out. It was not predicting fights, it was reading the answer key.
+The model is well-calibrated and predicts real signal, but **does not beat the
+betting market** — a conclusion the project set out to test honestly rather than
+assume.
 
-Two symptoms made this visible:
+---
 
-- Accuracy sat well above the 62-64% range reported by comparable public projects
-- Career win differential ranked as the second most important feature
+## The core idea
 
-The fix was to rebuild every feature from per-fight records. For each bout, a fighter's stats are the cumulative sum of all their *prior* fights only, computed via a grouped cumulative sum minus the current row. Three related corrections came with it:
+Every naive feature in a fight predictor is a *difference*: fighter A's
+takedown average minus fighter B's. But a grappler-vs-grappler fight and a
+striker-vs-striker fight can produce identical differences while being
+completely different fights. Difference-only features **destroy matchup
+information** — exactly the information a knowledgeable fan uses to predict
+upsets.
 
-- **Chronological split** instead of random. A random split lets the model train on 2025 fights to predict 2018 ones, which is a subtler version of the same problem.
-- **Train-set medians** for missing-value imputation, so test-set statistics never influence training.
-- **Debut filter** requiring 2+ prior fights, since a fighter with no history has no computable stats. Swept across 1, 2, and 3 priors; 2 performed best, though the differences fall within the noise floor for a test set this size.
+This project tests whether encoding that information — as style profiles and
+interaction terms — measurably improves the model.
 
-After the fix, career win differential dropped from 2nd to 10th in feature importance. Most of its apparent predictive power had been leakage.
+**It does.** The interaction feature `exp_str_success`
+(`A_striking_accuracy × (1 − B_striking_defense)`, minus the reverse) became
+the **second most important feature in the model**, behind only age. Adding
+style and interaction features closed the accuracy gap to the market from 5.4
+to 4.4 points.
 
-## What Predicts a Fight
+---
 
-| Rank | Feature | Importance |
+## What predicts a fight
+
+Top features after the full pipeline:
+
+| Rank | Feature | Meaning |
 |---|---|---|
-| 1 | Strikes absorbed per minute | 0.122 |
-| 2 | Striking defense | 0.116 |
-| 3 | Strikes landed per minute | 0.111 |
-| 4 | Takedowns per 15 min | 0.109 |
-| ... | | |
-| 9 | Reach | 0.058 |
-| 10 | Win differential | 0.057 |
-| 11 | Loss differential | 0.053 |
+| 1 | `age_diff` | age gap at fight date |
+| 2 | `exp_str_success` | expected striking success (interaction term) |
+| 3 | `winrate_diff` | pre-fight win rate gap |
+| 4 | `sapm_diff` | strikes absorbed per minute |
+| 5 | `rsapm_diff` | strikes absorbed, last 5 fights |
 
-The top two are both defensive. Not getting hit predicts winning more strongly than hitting does.
+Findings that held across every version of the model:
 
-Reach advantage, cited constantly in broadcast commentary, ranks 9th of 11. This held across both the leaky and corrected pipelines, which makes it the more robust of the two findings.
+- **Age is the strongest single predictor**, separating a fighter's résumé from
+  their current ability.
+- **Defense outranks offense** — strikes *absorbed* predicts better than strikes
+  *landed*.
+- **Matchup interaction terms rank near the top**, supporting the central
+  hypothesis.
+- **Reach ranks low** despite constant mention in broadcast commentary.
 
-## Endpoints
+---
 
-### `GET /fighters`
-All fighters with 1+ recorded UFC bouts, with UFC-only records.
+## Methodology, and the mistakes corrected along the way
 
-### `GET /predict?fighter1={name}&fighter2={name}`
-Win probabilities for a matchup.
+This project's history is mostly a sequence of self-caught errors. They're
+documented here because catching them was the point.
 
-```json
-{
-  "fighter1": "Jon Jones",
-  "fighter2": "Stipe Miocic",
-  "fighter1_win_probability": 0.71,
-  "fighter2_win_probability": 0.29,
-  "predicted_winner": "Jon Jones"
-}
-```
+### Data leakage (the big one)
+
+The first model reported **69.5% accuracy**. That was wrong. Features came from
+career-average statistics scraped in 2026, used to predict fights as far back as
+1993 — the model could see how each career turned out.
+
+I only questioned the number because published projects on the same problem top
+out at 62–64%, and I was beating them with a baseline model. The fix rebuilt
+every feature from per-fight data as **pre-fight rolling statistics**
+(cumulative sums excluding the current fight), switched to a **chronological
+train/test split**, and restricted median imputation to the training set.
+Accuracy fell to 61.2% — the first honest number. Confirmation the leak was
+real: career win differential collapsed from the 2nd most important feature to
+the 10th.
+
+### Positional bias
+
+The target was defined relative to "Fighter 1," who won 63% of the time in the
+raw data — so a model could score 63% by always guessing Fighter 1. Fixed by
+mirroring every fight (swap the fighters, flip the label), producing an exact
+50/50 target.
+
+### Probability compression
+
+The Random Forest systematically pulled probabilities toward 50% — when it said
+64%, the fighter actually won 72%. This is fine for classification but fatal for
+betting, where expected value multiplies by the probability. Isotonic and Platt
+calibration both cost accuracy at this dataset size. **Switching to XGBoost**
+solved it directly — its log-loss objective produces calibrated probabilities
+(top-bin error dropped from ~7.5 points to ~2).
+
+### A betting "edge" that wasn't
+
+An early backtest showed a +21% ROI on favorites. It was an artifact of two
+mistakes: a calibration correction accidentally fit on the test set, and
+post-hoc bucket selection across 16 comparisons. Refitting the correction on
+training data only *reduced* ROI, proving the improvement had been leakage. The
+apparent edge collapsed from a t-statistic of 2.5 to 1.2 — indistinguishable
+from noise.
+
+---
+
+## Why it doesn't beat the market (and why that's expected)
+
+The closing betting line aggregates bookmaker models, sharp money, and public
+sentiment into the most accurate probability estimate available. Beating it
+requires information the aggregate lacks — and the vig (≈4.5% here) is a floor
+any strategy must clear first.
+
+The model lands 4.4 points short of market accuracy with negative ROI at every
+threshold. No price bucket shows a profit that survives multiple-comparison
+scrutiny. That's consistent with everything known about efficient betting
+markets, and it's the honest result: **domain-informed features made the model
+measurably better, but not better than a market that already prices in most of
+what they capture.**
+
+---
 
 ## Architecture
 
-`train.py` owns all model work: feature engineering, training, evaluation, and writing both the model bundle and a serving-format stats file. `app/main.py` loads the bundle and serves it. The model can be swapped entirely without touching the API or the frontend.
+```
+train.py        ← ALL model work: feature engineering, training, evaluation
+app/main.py     ← loads the model bundle, serves predictions
+backtest.py     ← joins odds, computes EV and ROI against the market
+data/           ← source CSVs + generated serving stats
+models/         ← generated model bundle (gitignored)
+Dockerfile      ← runs train.py at build time, so every deploy retrains
+```
 
-The bundle stores the feature column order and training medians alongside the model, so serving reproduces training exactly. Mismatched column order would not raise an error in scikit-learn, it would silently produce wrong predictions.
+`train.py` owns the model entirely; `main.py` loads whatever bundle exists. The
+model was swapped from Random Forest to XGBoost without touching the API or the
+frontend. The bundle stores feature ordering and imputation medians alongside
+the model, so serving reproduces training exactly — a mismatched column order
+would silently produce wrong predictions rather than erroring.
+
+### Endpoints
+
+- `GET /fighters` — all fighters with UFC-only records
+- `GET /predict?fighter1={name}&fighter2={name}` — win probabilities
+
+---
 
 ## Stack
 
-Python, FastAPI, scikit-learn, pandas. Containerized with Docker, deployed on Render. The model is retrained during the image build, so every deploy ships a freshly trained model.
+Python, XGBoost, scikit-learn, pandas, FastAPI. Containerized with Docker,
+deployed on Render; frontend in Next.js/React on Vercel. Data from the
+[UFC Dataset 1994–2026](https://www.kaggle.com/datasets/jossilva3110/ufc-dataset-1994-2026)
+and betting odds from the
+[Ultimate UFC Dataset](https://www.kaggle.com/datasets/mdabbert/ultimate-ufc-dataset).
 
-## Running Locally
+## Running locally
 
 ```bash
 pip install -r requirements.txt
@@ -78,18 +173,13 @@ python train.py
 cd app && uvicorn main:app --reload
 ```
 
-## Known Limitations
+## Known limitations
 
-- Records and statistics are UFC-only. Fights in other promotions are not in the dataset, so a fighter's pre-UFC experience is invisible to the model. Adding it as a static feature (career total minus UFC total) is a planned improvement.
-- Fighters are matched across the two source files by name. Duplicate names are collapsed to the first occurrence, which assigns a small number of fighters the wrong biometrics.
-- Reach is missing for roughly 24% of fighters in the serving set and is filled with the training median.
-
-## Roadmap
-
-- Weekly automated scraping and retraining
-- XGBoost comparison against the current Random Forest
-- Backtesting against historical closing odds, since accuracy against a 50% baseline says little about whether the model has edge over a market that already prices in most of this information
-
-## Data
-
-[UFC Dataset 1994-2026](https://www.kaggle.com/datasets/jossilva3110/ufc-dataset-1994-2026)
+- Statistics are **UFC-only**; pre-UFC fights are invisible, so records start at
+  zero on UFC debut and display smaller than fans expect.
+- Fighters are joined across files by name; duplicate names collapse to the
+  first occurrence.
+- Reach is missing for ~24% of fighters and filled with the training median.
+- **Open-stance experience** — a known stylistic factor — could not be tested
+  because stance is missing for 19% of fighters.
+- No weight-class feature, so division-specific base rates are not modeled.
