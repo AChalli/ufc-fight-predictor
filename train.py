@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 
@@ -149,8 +150,10 @@ X_train, X_test = X_train.fillna(med), X_test.fillna(med)
 print(f"features: {len(feature_cols)}   train: {len(train_df)}   test: {len(test_df)}")
 print(f"cutoff: {cutoff.date()}")
 
-model = RandomForestClassifier(n_estimators=300, min_samples_leaf=5,
-                               random_state=42, n_jobs=-1)
+model = XGBClassifier(n_estimators=300, max_depth=4, learning_rate=0.05,
+                      subsample=0.8, colsample_bytree=0.8,
+                      eval_metric="logloss", random_state=42, n_jobs=-1)
+
 model.fit(X_train, y_train)
 
 p = model.predict_proba(X_test)[:, 1]
@@ -167,7 +170,7 @@ for b in range(len(bins) - 1):
         print(f"{bins[b]:.1f}-{bins[b+1]:.1f}  {m.sum():5d}   {p[m].mean():.3f}     {y_test.values[m].mean():.3f}")
 
 print("\nTOP FEATURES")
-print(pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False).head(12))
+print(pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False).to_string())
 
 joblib.dump({"model": model, "features": feature_cols, "medians": med.to_dict()}, MODEL_PATH)
 
