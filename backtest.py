@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-from train import test_df, feature_cols, med, model
+from train import test_raw, feature_cols, med, model
 
 BASE = "/code" if os.path.exists("/code") else "."
 ODDS_PATH = f"{BASE}/data/ufc-master.csv"
@@ -27,7 +27,7 @@ odds_long = pd.concat([
 odds_lookup = odds_long.set_index(["k", "fighter"])["american"]
 
 # ---------- 2. attach odds to the test fights ----------
-bt = test_df.copy()
+bt = test_raw.copy()
 bt["k"] = pair_key(bt["Event_Date"], bt["Fighter_1"], bt["Fighter_2"])
 bt["odds_1"] = [odds_lookup.get((k, f), np.nan) for k, f in zip(bt["k"], bt["Fighter_1"])]
 bt["odds_2"] = [odds_lookup.get((k, f), np.nan) for k, f in zip(bt["k"], bt["Fighter_2"])]
